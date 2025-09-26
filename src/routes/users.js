@@ -586,6 +586,125 @@ router.put('/:id', async (req, res) => {
 });
 
 /**
+ * PUT /api/users/:id/preferences
+ * Update user preferences
+ */
+router.put('/:id/preferences', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const preferences = req.body;
+
+    console.log('🔄 Updating user preferences:', { userId: id, preferences });
+
+    // Validate preferences
+    const validPreferences = {};
+    
+    if (preferences.gameFormat) {
+      if (!['cash', 'tournaments'].includes(preferences.gameFormat)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid game format. Must be "cash" or "tournaments"'
+        });
+      }
+      validPreferences['preferences.gameFormat'] = preferences.gameFormat;
+    }
+
+    if (preferences.stackSize) {
+      if (!['50bb', '100bb', '200bb', '300bb+'].includes(preferences.stackSize)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid stack size. Must be "50bb", "100bb", "200bb", or "300bb+"'
+        });
+      }
+      validPreferences['preferences.stackSize'] = preferences.stackSize;
+    }
+
+    if (preferences.analysisSpeed) {
+      if (!['slow', 'fast', 'instant', 'adaptive'].includes(preferences.analysisSpeed)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid analysis speed. Must be "slow", "fast", "instant", or "adaptive"'
+        });
+      }
+      validPreferences['preferences.analysisSpeed'] = preferences.analysisSpeed;
+    }
+
+    if (preferences.difficultyLevel) {
+      if (!['beginner', 'intermediate', 'advanced', 'expert'].includes(preferences.difficultyLevel)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid difficulty level. Must be "beginner", "intermediate", "advanced", or "expert"'
+        });
+      }
+      validPreferences['preferences.difficultyLevel'] = preferences.difficultyLevel;
+    }
+
+    if (preferences.sessionLength) {
+      if (!['15min', '30min', '45min', '60min', 'custom'].includes(preferences.sessionLength)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid session length. Must be "15min", "30min", "45min", "60min", or "custom"'
+        });
+      }
+      validPreferences['preferences.sessionLength'] = preferences.sessionLength;
+    }
+
+    if (preferences.focusAreas) {
+      const validFocusAreas = ['preflop', 'flop', 'turn', 'river', 'bluffing', 'value_betting', 'position', 'stack_sizes'];
+      if (!Array.isArray(preferences.focusAreas) || 
+          !preferences.focusAreas.every(area => validFocusAreas.includes(area))) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid focus areas. Must be an array of valid focus areas'
+        });
+      }
+      validPreferences['preferences.focusAreas'] = preferences.focusAreas;
+    }
+
+    // Update user preferences
+    const user = await User.findByIdAndUpdate(
+      id,
+      { $set: validPreferences },
+      { new: true, runValidators: true }
+    ).select('-password -resetPasswordToken -resetPasswordExpires');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    console.log('✅ User preferences updated successfully:', user.email);
+
+    res.json({
+      success: true,
+      data: { 
+        user,
+        preferences: user.preferences
+      },
+      message: 'User preferences updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Error updating user preferences:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: Object.values(error.errors).map(err => err.message)
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update user preferences'
+    });
+  }
+});
+
+/**
  * DELETE /api/users/:id
  * Delete a user
  */

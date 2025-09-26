@@ -80,6 +80,39 @@ const userSchema = new mongoose.Schema({
       analysisNotes: null
     }
   },
+  // User preferences for game settings
+  preferences: {
+    gameFormat: {
+      type: String,
+      enum: ['cash', 'tournaments'],
+      default: 'cash'
+    },
+    stackSize: {
+      type: String,
+      enum: ['50bb', '100bb', '200bb', '300bb+'],
+      default: '100bb'
+    },
+    analysisSpeed: {
+      type: String,
+      enum: ['slow', 'fast', 'instant', 'adaptive'],
+      default: 'fast'
+    },
+    difficultyLevel: {
+      type: String,
+      enum: ['beginner', 'intermediate', 'advanced', 'expert'],
+      default: 'advanced'
+    },
+    sessionLength: {
+      type: String,
+      enum: ['15min', '30min', '45min', '60min', 'custom'],
+      default: '30min'
+    },
+    focusAreas: {
+      type: [String],
+      enum: ['preflop', 'flop', 'turn', 'river', 'bluffing', 'value_betting', 'position', 'stack_sizes'],
+      default: ['preflop', 'turn']
+    }
+  },
   resetPasswordToken: String,
   resetPasswordExpires: Date
 }, {
