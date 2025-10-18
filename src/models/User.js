@@ -20,8 +20,19 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: [true, 'Password is required'],
+    required: function() {
+      return !this.googleId; // Password required only if not Google user
+    },
     minlength: [6, 'Password must be at least 6 characters long']
+  },
+  googleId: {
+    type: String,
+    unique: true,
+    sparse: true // Allows multiple null values
+  },
+  googleEmail: {
+    type: String,
+    sparse: true
   },
   avatar: {
     id: {
@@ -58,7 +69,7 @@ const userSchema = new mongoose.Schema({
   },
   availableUsage: {
     type: Number,
-    default: 100 //high, medium, low
+    default: 40 //high, medium, low
   },
   recentSessionCash: {
     type: Object,

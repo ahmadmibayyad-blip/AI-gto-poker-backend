@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const Joi = require('joi');
+const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 
 const router = express.Router();
@@ -27,6 +28,13 @@ const registerSchema = Joi.object({
 const loginSchema = Joi.object({
   email: Joi.string().email().required().trim().lowercase(),
   password: Joi.string().required()
+});
+
+const googleAuthSchema = Joi.object({
+  googleId: Joi.string().required(),
+  email: Joi.string().email().required().trim().lowercase(),
+  fullName: Joi.string().min(2).max(50).required().trim(),
+  picture: Joi.string().uri().optional()
 });
 
 // Helper function to generate JWT token
@@ -200,6 +208,113 @@ router.post('/login', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Login failed. Please try again.'
+    });
+  }
+});
+
+// @route   POST /api/auth/google
+// @desc    Authenticate user with Google OAuth
+// @access  Public
+router.post('/google', async (req, res) => {
+  try {
+    console.log('🔐 Google OAuth attempt:', { 
+      googleId: req.body.googleId, 
+      email: req.body.email 
+    });
+    
+    // Validate input
+    const { error, value } = googleAuthSchema.validate(req.body);
+    if (error) {
+      console.log('❌ Google auth validation error:', error.details[0].message);
+      return res.status(400).json({
+        success: false,
+        error: error.details[0].message
+      });
+    }
+
+    const { googleId, email, fullName, picture } = value;
+
+    // Check if user already exists with this Google ID
+    let user = await User.findOne({ googleId });
+    
+    if (user) {
+      // User already exists with Google ID - prevent registration, redirect to login
+      console.log('❌ User already exists with Google ID:', user.email);
+      return res.status(409).json({
+        success: false,
+        error: 'This account is already registered. Please login using this account!',
+        authType: 'existing_user'
+      });
+    }
+
+    // Check if user exists with same email but different auth method
+    const existingUser = await User.findByEmail(email);
+    
+    if (existingUser) {
+      // User already exists with this email - prevent duplicate registration
+      console.log('❌ User already exists with this email:', email);
+      return res.status(409).json({
+        success: false,
+        error: 'An account with this email already exists. Please use the login page instead.',
+        authType: 'duplicate_email'
+      });
+    }
+
+    // Only create new user if neither Google ID nor email exists
+    const userData = {
+      fullName,
+      email,
+      googleId,
+      googleEmail: email,
+      isActive: true,
+      adminAllowed: false,
+      planStatus: 'free',
+      userUsage: 0,
+      avatar: {
+        id: 'avatar1',
+        icon: 'person-circle',
+        color: '#007AFF'
+      },
+      lastLogin: new Date()
+    };
+
+    // If picture is provided, you could store it or use it for avatar
+    if (picture) {
+      userData.avatar.icon = 'person-circle'; // You could implement custom avatar logic here
+    }
+
+    user = new User(userData);
+    await user.save();
+    
+    console.log('✅ New Google user created:', user.email);
+
+    // Check if account is active
+    if (!user.isActive) {
+      console.log('❌ Account deactivated:', user.email);
+      return res.status(401).json({
+        success: false,
+        error: 'Account is deactivated'
+      });
+    }
+
+    // Generate JWT token
+    const token = generateToken(user);
+
+    res.json({
+      success: true,
+      message: 'Account created successfully with Google',
+      authType: 'register',
+      data: {
+        user: user.toJSON(),
+        token
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Google OAuth error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Google authentication failed. Please try again.'
     });
   }
 });
@@ -657,6 +772,196 @@ router.delete('/users/:id', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to delete user. Please try again.'
+    });
+  }
+});
+
+// @route   POST /api/auth/google-login
+// @desc    Login user with Google OAuth (for existing users)
+// @access  Public
+router.post('/google-login', async (req, res) => {
+  try {
+    console.log('🔐 Google Login attempt:', { 
+      googleId: req.body.googleId, 
+      email: req.body.email 
+    });
+    
+    // Validate input
+    const { error, value } = googleAuthSchema.validate(req.body);
+    if (error) {
+      console.log('❌ Google login validation error:', error.details[0].message);
+      return res.status(400).json({
+        success: false,
+        error: error.details[0].message
+      });
+    }
+
+    const { googleId, email, fullName, picture } = value;
+
+    // Check if user exists with this Google ID
+    let user = await User.findOne({ googleId });
+    
+    if (user) {
+      // User exists with Google ID - log them in
+      user.lastLogin = new Date();
+      await user.save();
+      
+      console.log('✅ Existing Google user logged in:', user.email);
+      
+      // Check if account is active
+      if (!user.isActive) {
+        console.log('❌ Account deactivated:', user.email);
+        return res.status(401).json({
+          success: false,
+          error: 'Account is deactivated'
+        });
+      }
+
+      // Generate JWT token
+      const token = generateToken(user);
+
+      res.json({
+        success: true,
+        message: 'Google login successful',
+        authType: 'login',
+        data: {
+          user: user.toJSON(),
+          token
+        }
+      });
+      return;
+    }
+
+    // Check if user exists with same email but different auth method
+    const existingUser = await User.findByEmail(email);
+    
+    if (existingUser) {
+      // User exists with same email but no Google ID - link the account
+      existingUser.googleId = googleId;
+      existingUser.googleEmail = email;
+      existingUser.lastLogin = new Date();
+      await existingUser.save();
+      
+      console.log('✅ Google account linked to existing user:', existingUser.email);
+      
+      // Check if account is active
+      if (!existingUser.isActive) {
+        console.log('❌ Account deactivated:', existingUser.email);
+        return res.status(401).json({
+          success: false,
+          error: 'Account is deactivated'
+        });
+      }
+
+      // Generate JWT token
+      const token = generateToken(existingUser);
+
+      res.json({
+        success: true,
+        message: 'Google account linked and login successful',
+        authType: 'linked',
+        data: {
+          user: existingUser.toJSON(),
+          token
+        }
+      });
+      return;
+    }
+
+    // User doesn't exist - they should register first
+    console.log('❌ User not found for Google login:', email);
+    return res.status(404).json({
+      success: false,
+      error: 'No account found with this Google account. Please register first.',
+      authType: 'not_found'
+    });
+
+  } catch (error) {
+    console.error('❌ Google Login error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Google login failed. Please try again.'
+    });
+  }
+});
+
+// Handle preflight requests for Google token exchange
+router.options('/google-token-exchange', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.status(200).end();
+});
+
+// @route   POST /api/auth/google-token-exchange
+// @desc    Exchange Google authorization code for access token
+// @access  Public
+router.post('/google-token-exchange', async (req, res) => {
+  try {
+    // Set CORS headers explicitly
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    
+    console.log('🔄 Google token exchange request:', { 
+      code: req.body.code ? 'present' : 'missing',
+      redirectUri: req.body.redirectUri,
+      clientId: req.body.clientId ? 'present' : 'missing',
+      origin: req.headers.origin
+    });
+    
+    const { code, redirectUri, clientId } = req.body;
+    
+    if (!code || !redirectUri || !clientId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: code, redirectUri, clientId'
+      });
+    }
+    
+    // Exchange authorization code for access token
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET || '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', // This should be set in your .env
+        code: code,
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri,
+      }),
+    });
+    
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.text();
+      console.error('❌ Google token exchange failed:', errorData);
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to exchange authorization code for token',
+        details: errorData
+      });
+    }
+    
+    const tokenData = await tokenResponse.json();
+    console.log('✅ Google token exchange successful');
+    
+    res.json({
+      success: true,
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      expiresIn: tokenData.expires_in,
+      tokenType: tokenData.token_type
+    });
+    
+  } catch (error) {
+    console.error('❌ Google token exchange error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error during token exchange'
     });
   }
 });

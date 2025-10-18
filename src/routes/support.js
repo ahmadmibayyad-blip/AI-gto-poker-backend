@@ -538,4 +538,137 @@ router.get('/types', (req, res) => {
   }
 });
 
+/**
+ * POST /api/support/tickets/:id/close
+ * Close a support ticket
+ */
+router.post('/tickets/:id/close', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      reason = 'Ticket closed by admin',
+      closedBy,
+      closedByEmail
+    } = req.body;
+
+    // Find the support ticket
+    const ticket = await Support.findById(id);
+    if (!ticket) {
+      return res.status(404).json({
+        success: false,
+        error: 'Support ticket not found'
+      });
+    }
+
+    // Check if ticket is already closed
+    if (ticket.status === 'closed') {
+      return res.status(400).json({
+        success: false,
+        error: 'Ticket is already closed'
+      });
+    }
+
+    // Close the ticket using the model method
+    ticket.closeTicket();
+
+    // Add a closing response if reason is provided
+    if (reason && reason !== 'Ticket closed by admin') {
+      ticket.addResponse({
+        message: `Ticket closed: ${reason}`,
+        isFromAgent: true,
+        authorName: closedBy || 'Admin User',
+        authorEmail: closedByEmail || 'admin@gto-poker.com',
+        isInternal: false
+      });
+    }
+
+    // Save the ticket
+    await ticket.save();
+
+    console.log(`🔒 Ticket ${id} closed by ${closedByEmail || 'admin'}`);
+
+    res.json({
+      success: true,
+      ticket: ticket.getPublicInfo(),
+      message: 'Ticket closed successfully'
+    });
+
+  } catch (error) {
+    console.error('Close ticket error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to close ticket'
+    });
+  }
+});
+
+/**
+ * POST /api/support/tickets/:id/reply
+ * Add a reply to a support ticket
+ */
+router.post('/tickets/:id/reply', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      message,
+      isFromAgent = true,
+      authorName,
+      authorEmail,
+      isInternal = false
+    } = req.body;
+
+    // Validate required fields
+    if (!message || !authorName || !authorEmail) {
+      return res.status(400).json({
+        success: false,
+        error: 'Message, author name, and author email are required'
+      });
+    }
+
+    // Find the support ticket
+    const ticket = await Support.findById(id);
+    if (!ticket) {
+      return res.status(404).json({
+        success: false,
+        error: 'Support ticket not found'
+      });
+    }
+
+    // Check if ticket is closed
+    if (ticket.status === 'closed') {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot reply to a closed ticket'
+      });
+    }
+
+    // Add the reply using the model method
+    const response = ticket.addResponse({
+      message,
+      isFromAgent,
+      authorName,
+      authorEmail,
+      isInternal
+    });
+
+    // Save the ticket
+    await ticket.save();
+
+    console.log(`💬 Reply added to ticket ${id} by ${authorEmail}`);
+
+    res.json({
+      success: true,
+      response,
+      message: 'Reply sent successfully'
+    });
+
+  } catch (error) {
+    console.error('Add reply error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to add reply'
+    });
+  }
+});
+
 module.exports = router;
