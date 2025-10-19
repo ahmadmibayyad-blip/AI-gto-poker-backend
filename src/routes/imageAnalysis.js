@@ -285,12 +285,24 @@ router.get('/stats', async (req, res) => {
     // Get total analysis count
     const totalAnalyses = await PokerAnalysis.countDocuments();
 
+    // Get unique users count (Active Players)
+    const uniqueUsers = await PokerAnalysis.distinct('userId');
+    const totalUniqueUsers = uniqueUsers.filter(userId => userId !== null && userId !== undefined).length;
+
+    // Get average user rating (excluding 0 ratings)
+    const avgUserRating = await User.aggregate([
+      { $match: { rating: { $gt: 0 } } }, // Only users with rating > 0
+      { $group: { _id: null, avgRating: { $avg: '$rating' } } }
+    ]);
+
     // Format the results
     const stats = {
       avgProcessingTime: avgProcessingTime.length > 0 ? parseFloat(avgProcessingTime[0].avgTime).toFixed(2) : '0.00',
       avgConfidence: avgConfidence.length > 0 ? Math.round(avgConfidence[0].avgConfidence) : 0,
       maxDecisions: maxDecisions.length > 0 ? maxDecisions[0].maxDecisions : 0,
-      totalAnalyses: totalAnalyses
+      totalAnalyses: totalAnalyses,
+      totalUniqueUsers: totalUniqueUsers,
+      avgUserRating: avgUserRating.length > 0 ? parseFloat(avgUserRating[0].avgRating).toFixed(1) : '0.0'
     };
 
     console.log('📊 Analysis stats calculated:', stats);
@@ -1315,9 +1327,51 @@ router.post('/claim-reward/:userId', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error claiming reward:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error' 
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * GET /api/analysis/accuracy-rate
+ * Get overall average accuracy rate from all analyses
+ */
+router.get('/accuracy-rate', async (req, res) => {
+  try {
+    console.log('📊 Calculating overall accuracy rate...');
+
+    // Get average confidence as accuracy rate
+    const avgConfidence = await PokerAnalysis.aggregate([
+      { $match: { confidence: { $exists: true, $ne: null } } },
+      { $group: { _id: null, avgConfidence: { $avg: '$confidence' } } }
+    ]);
+
+    // Get total analysis count for context
+    const totalAnalyses = await PokerAnalysis.countDocuments();
+
+    // Calculate accuracy rate (round to nearest integer)
+    const accuracyRate = avgConfidence.length > 0 
+      ? Math.round(avgConfidence[0].avgConfidence) 
+      : 0;
+
+    console.log(`📊 Overall accuracy rate calculated: ${accuracyRate}% (from ${totalAnalyses} analyses)`);
+
+    res.json({
+      success: true,
+      data: {
+        accuracyRate: accuracyRate,
+        totalAnalyses: totalAnalyses,
+        message: `Average accuracy rate: ${accuracyRate}%`
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error calculating accuracy rate:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to calculate accuracy rate'
     });
   }
 });

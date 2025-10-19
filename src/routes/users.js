@@ -739,6 +739,68 @@ router.put('/:id/preferences', async (req, res) => {
 });
 
 /**
+ * PUT /api/users/:id/rating
+ * Update user app rating
+ */
+router.put('/:id/rating', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rating } = req.body;
+
+    console.log('⭐ Updating user rating:', { userId: id, rating });
+
+    // Validate rating
+    if (!rating || rating < 1 || rating > 5 || !Number.isInteger(rating)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Rating must be an integer between 1 and 5'
+      });
+    }
+
+    // Update user rating
+    const user = await User.findByIdAndUpdate(
+      id,
+      { rating },
+      { new: true, runValidators: true }
+    ).select('-password -resetPasswordToken -resetPasswordExpires');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    console.log('✅ User rating updated successfully:', user.email, 'Rating:', rating);
+
+    res.json({
+      success: true,
+      data: { 
+        user,
+        rating: user.rating
+      },
+      message: 'User rating updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Error updating user rating:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: Object.values(error.errors).map(err => err.message)
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update user rating'
+    });
+  }
+});
+
+/**
  * DELETE /api/users/:id
  * Delete a user
  */

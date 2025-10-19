@@ -50,9 +50,11 @@ async function startServer() {
         
         // List of allowed origins
         const allowedOrigins = [
+          'http://localhost:8080',  // Frontend development server
           'http://localhost:8081',
           'http://localhost:19006',
           'http://localhost:3000',
+          'http://127.0.0.1:8080',  // Frontend development server
           'http://127.0.0.1:8081',
           'http://127.0.0.1:19006',
           'http://127.0.0.1:3000',
@@ -98,7 +100,6 @@ async function startServer() {
       console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 CORS enabled for: ${process.env.FRONTEND_URL || 'http://localhost:8081'}`);
     });
-
     
     return app;
   } catch (error) {

@@ -63,6 +63,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: 'free' //premium, basic, free
   },
+  rating: {
+    type: Number,
+    default: 0 //1-5
+  },
   userUsage: {
     type: Number,
     default: 0 //high, medium, low
