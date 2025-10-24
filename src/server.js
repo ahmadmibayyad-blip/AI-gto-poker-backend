@@ -13,6 +13,7 @@ const healthRoutes = require('./routes/health');
 const authRoutes = require('./routes/auth');
 const supportRoutes = require('./routes/support');
 const userRoutes = require('./routes/users');
+const paymentRoutes = require('./routes/payments');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 // Connect to MongoDB before starting server
@@ -95,6 +96,7 @@ async function startServer() {
     app.use('/api/auth', authRoutes);
     app.use('/api/support', supportRoutes);
     app.use('/api/users', userRoutes);
+    app.use('/api/payments', paymentRoutes);
 
     // Error handling middleware
     app.use(notFound);

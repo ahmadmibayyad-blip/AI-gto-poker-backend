@@ -29,6 +29,16 @@ const createAdminUser = async () => {
       console.log('✅ Admin user already exists');
       console.log('Email:', existingAdmin.email);
       console.log('Admin Allowed:', existingAdmin.adminAllowed);
+      
+      // Update admin privileges if not set
+      if (!existingAdmin.adminAllowed) {
+        console.log('⚠️  Admin privileges not enabled. Updating...');
+        existingAdmin.adminAllowed = true;
+        existingAdmin.isActive = true;
+        await existingAdmin.save();
+        console.log('✅ Admin privileges enabled successfully');
+      }
+      
       process.exit(0);
     }
 

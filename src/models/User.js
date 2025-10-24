@@ -73,7 +73,7 @@ const userSchema = new mongoose.Schema({
   },
   availableUsage: {
     type: Number,
-    default: 40 //high, medium, low
+    default: 20 //high, medium, low
   },
   recentSessionCash: {
     type: Object,
@@ -128,6 +128,36 @@ const userSchema = new mongoose.Schema({
       default: ['preflop', 'turn']
     }
   },
+  // Payment-related fields
+  stripeCustomerId: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
+  totalSpent: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  totalQuotaPurchased: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  lastPurchaseDate: {
+    type: Date
+  },
+  paymentPreferences: {
+    defaultCurrency: {
+      type: String,
+      default: 'usd',
+      uppercase: true
+    },
+    autoRenew: {
+      type: Boolean,
+      default: false
+    }
+  },
   resetPasswordToken: String,
   resetPasswordExpires: Date
 }, {
@@ -167,6 +197,36 @@ userSchema.methods.getPublicProfile = function() {
 // Static method to find user by email
 userSchema.statics.findByEmail = function(email) {
   return this.findOne({ email: email.toLowerCase() });
+};
+
+// Instance method to add quota to user
+userSchema.methods.addQuota = async function(quotaAmount, transactionId = null) {
+  this.availableUsage = (this.availableUsage || 0) + quotaAmount;
+  this.totalQuotaPurchased = (this.totalQuotaPurchased || 0) + quotaAmount;
+  this.lastPurchaseDate = new Date();
+  
+  if (transactionId) {
+    // Store transaction reference if needed
+    console.log(`✅ Added ${quotaAmount} quota to user ${this.email} via transaction ${transactionId}`);
+  }
+  
+  return this.save();
+};
+
+// Instance method to check if user can afford quota
+userSchema.methods.canAffordQuota = function(quotaAmount) {
+  return this.availableUsage >= quotaAmount;
+};
+
+// Instance method to get payment summary
+userSchema.methods.getPaymentSummary = function() {
+  return {
+    totalSpent: this.totalSpent || 0,
+    totalQuotaPurchased: this.totalQuotaPurchased || 0,
+    currentQuota: this.availableUsage || 0,
+    lastPurchaseDate: this.lastPurchaseDate,
+    stripeCustomerId: this.stripeCustomerId
+  };
 };
 
 // Virtual for user ID as string
