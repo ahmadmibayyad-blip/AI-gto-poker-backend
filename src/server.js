@@ -83,6 +83,10 @@ async function startServer() {
     
     app.use(cors(corsOptions));
 
+        // IMPORTANT: Add webhook route BEFORE JSON body parsing
+    // This ensures Stripe webhook receives raw body for signature verification
+    app.use('/api/payments/webhook', paymentRoutes);
+
     // Body parsing middleware
     app.use(express.json({ limit: '10mb' }));
     app.use(express.urlencoded({ extended: true, limit: '10mb' }));

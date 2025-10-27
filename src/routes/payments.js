@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const PaymentPlan = require('../models/PaymentPlan');
+const CryptoPayment = require('../models/CryptoPayment');
 const { authenticateToken, authenticateAdmin } = require('../middleware/auth');
 
 // Test route to verify payments router is working
@@ -1011,6 +1012,10 @@ router.get('/summary', authenticateToken, async (req, res) => {
 /**
  * POST /api/payments/webhook
  * Handle Stripe webhooks
+ * 
+ * IMPORTANT: This route MUST be added BEFORE any JSON body parsing middleware
+ * in your server.js file. If the body is already parsed by express.json(),
+ * signature verification will fail.
  */
 router.post('/webhook', express.raw({type: 'application/json'}), async (req, res) => {
   const sig = req.headers['stripe-signature'];
@@ -1023,10 +1028,24 @@ router.post('/webhook', express.raw({type: 'application/json'}), async (req, res
       return res.status(500).send('Webhook configuration error');
     }
 
+    // Debug logging
+    console.log('🔔 Webhook received');
+    console.log('📝 Request body type:', typeof req.body);
+    console.log('📏 Request body length:', req.body ? req.body.length : 0);
+    console.log('🔑 Signature present:', !!sig);
+
     const stripe = getStripeInstance();
     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    console.log('✅ Webhook signature verified successfully');
   } catch (err) {
     console.error('❌ Webhook signature verification failed:', err.message);
+    console.error('🔍 Error details:', err);
+    
+    // Log additional debugging info
+    console.log('📋 Request headers:', Object.keys(req.headers));
+    console.log('📋 Content-Type:', req.headers['content-type']);
+    console.log('📋 Stripe-Signature:', req.headers['stripe-signature']);
+    
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
@@ -1247,6 +1266,351 @@ router.get('/revenue/stats', authenticateAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch revenue statistics'
+    });
+  }
+});
+
+/**
+ * POST /api/payments/create-crypto-payment
+ * Create a crypto payment request
+ */
+router.post('/create-crypto-payment', authenticateToken, async (req, res) => {
+  console.log('🔍 Creating crypto payment request...');
+  console.log('📝 Request body:', req.body);
+  try {
+    const { planId, network } = req.body;
+    const userId = req.user.id;
+    console.log('🆔 User ID:', userId);
+    console.log('📋 Plan ID:', planId);
+    console.log('🌐 Network:', network);
+
+    // Validate input
+    if (!planId || !network) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: planId, network'
+      });
+    }
+
+    if (!['BEP20', 'SOL'].includes(network)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid network. Must be BEP20 or SOL'
+      });
+    }
+
+    // Find plan
+    const plan = await PaymentPlan.findById(planId);
+    if (!plan || !plan.isActive) {
+      return res.status(404).json({
+        success: false,
+        error: 'Payment plan not found or inactive'
+      });
+    }
+
+    // Get user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Generate unique payment ID
+    const paymentId = `crypto-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Determine wallet address and token based on network
+    let walletAddress, token;
+    
+    console.log('🌍 Environment check:');
+    console.log('  BEP20_WALLET_ADDRESS:', process.env.BEP20_WALLET_ADDRESS ? 'Set' : 'NOT SET');
+    console.log('  SOL_WALLET_ADDRESS:', process.env.SOL_WALLET_ADDRESS ? 'Set' : 'NOT SET');
+    
+    if (network === 'BEP20') {
+      walletAddress = process.env.BEP20_WALLET_ADDRESS || '0x' + '0'.repeat(40);
+      token = 'USDT';
+      console.log('💼 Using BEP20 wallet:', walletAddress.substring(0, 20) + '...');
+    } else if (network === 'SOL') {
+      walletAddress = process.env.SOL_WALLET_ADDRESS || '0'.repeat(44);
+      token = 'SOL';
+      console.log('💼 Using SOL wallet:', walletAddress.substring(0, 20) + '...');
+    }
+
+    if (!walletAddress || walletAddress === '0x' + '0'.repeat(40) || walletAddress === '0'.repeat(44)) {
+      return res.status(500).json({
+        success: false,
+        error: 'Crypto payment is not configured. Please contact support.'
+      });
+    }
+
+    // Create memo with payment ID for verification
+    const memo = `TXN-${user._id.toString().slice(-6)}-${paymentId.slice(-6)}`;
+
+    // Set expiration (default 30 minutes)
+    const expiryMinutes = parseInt(process.env.CRYPTO_PAYMENT_EXPIRY_MINUTES || '30');
+    const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+
+    // Create crypto payment record
+    const cryptoPayment = await CryptoPayment.create({
+      paymentId,
+      userId,
+      planId: plan._id,
+      network,
+      token,
+      amount: plan.price,
+      walletAddress,
+      memo,
+      expiresAt,
+      status: 'pending'
+    });
+
+    console.log(`✅ Crypto payment created: ${paymentId} for user ${user.email}`);
+
+    res.json({
+      success: true,
+      data: {
+        paymentId,
+        walletAddress,
+        amount: plan.price,
+        token,
+        network,
+        memo,
+        expiresAt,
+        currency: 'USD',
+        planName: plan.name,
+        quotaAmount: plan.quotaAmount
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error creating crypto payment:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create crypto payment',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/payments/verify-crypto-transaction
+ * Verify a crypto transaction on the blockchain
+ */
+router.post('/verify-crypto-transaction', authenticateToken, async (req, res) => {
+  try {
+    const { paymentId, txnHash } = req.body;
+    const userId = req.user.id;
+
+    // Validate input
+    if (!paymentId || !txnHash) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: paymentId, txnHash'
+      });
+    }
+
+    // Find crypto payment
+    const cryptoPayment = await CryptoPayment.findByPaymentId(paymentId);
+    
+    if (!cryptoPayment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Payment not found'
+      });
+    }
+
+    // Verify user owns this payment
+    if (cryptoPayment.userId.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied'
+      });
+    }
+
+    // Check if already confirmed
+    if (cryptoPayment.status === 'confirmed') {
+      return res.status(400).json({
+        success: false,
+        error: 'This payment has already been confirmed'
+      });
+    }
+
+    // Check if expired
+    if (cryptoPayment.isExpired()) {
+      cryptoPayment.status = 'expired';
+      await cryptoPayment.save();
+      
+      return res.status(400).json({
+        success: false,
+        error: 'This payment has expired. Please create a new payment.'
+      });
+    }
+
+    console.log(`🔍 Verifying ${cryptoPayment.network} transaction: ${txnHash}`);
+
+    // Set status to processing
+    cryptoPayment.status = 'processing';
+    cryptoPayment.transactionHash = txnHash;
+    await cryptoPayment.save();
+
+    // Verify on blockchain (mock implementation for now)
+    let verified = false;
+    let verificationData = null;
+
+    if (cryptoPayment.network === 'BEP20') {
+      // For BEP20 - mock verification
+      // In production, implement actual BSC blockchain verification
+      verified = true;
+      verificationData = {
+        amount: cryptoPayment.amount,
+        fromAddress: '0x' + '0'.repeat(40),
+        confirmationCount: 3
+      };
+      
+      console.log('⚠️ BEP20 verification is mocked. Implement actual blockchain verification.');
+      
+    } else if (cryptoPayment.network === 'SOL') {
+      // For SOL - mock verification
+      // In production, implement actual Solana blockchain verification
+      verified = true;
+      verificationData = {
+        amount: cryptoPayment.amount,
+        fromAddress: '0'.repeat(44),
+        confirmationCount: 32
+      };
+      
+      console.log('⚠️ SOL verification is mocked. Implement actual blockchain verification.');
+    }
+
+    if (!verified || !verificationData) {
+      cryptoPayment.fail('Transaction verification failed');
+      await cryptoPayment.save();
+      
+      return res.status(400).json({
+        success: false,
+        error: 'Transaction could not be verified. Please check your transaction hash.'
+      });
+    }
+
+    // Mark payment as confirmed
+    cryptoPayment.confirm(
+      verificationData.amount,
+      verificationData.fromAddress,
+      verificationData.confirmationCount,
+      txnHash
+    );
+    await cryptoPayment.save();
+
+    // Find plan to get quota amount
+    const plan = await PaymentPlan.findById(cryptoPayment.planId);
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        error: 'Payment plan not found'
+      });
+    }
+
+    // Find user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Create transaction record
+    const transaction = await Transaction.create({
+      userId,
+      stripePaymentIntentId: null,
+      amount: Math.round(cryptoPayment.amount * 100), // Convert to cents
+      currency: 'usd',
+      quotaAmount: plan.quotaAmount,
+      status: 'succeeded',
+      description: `Purchase ${plan.quotaAmount} analysis credits via ${cryptoPayment.network} - ${plan.name}`,
+      metadata: {
+        paymentMethod: 'crypto',
+        network: cryptoPayment.network,
+        token: cryptoPayment.token,
+        transactionHash: txnHash,
+        cryptoPaymentId: cryptoPayment._id,
+        planId: plan._id,
+        planName: plan.name
+      }
+    });
+
+    // Add quota to user
+    user.totalSpent = (user.totalSpent || 0) + cryptoPayment.amount;
+    await user.addQuota(plan.quotaAmount, transaction._id);
+
+    console.log(`✅ Crypto payment confirmed: ${paymentId} - User ${user.email} received ${plan.quotaAmount} credits`);
+
+    res.json({
+      success: true,
+      data: {
+        verified: true,
+        quotaAdded: plan.quotaAmount,
+        newAvailableUsage: user.availableUsage,
+        transactionId: transaction._id,
+        amount: cryptoPayment.amount,
+        confirmationCount: verificationData.confirmationCount
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error verifying crypto transaction:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to verify crypto transaction'
+    });
+  }
+});
+
+/**
+ * GET /api/payments/crypto-status/:paymentId
+ * Check status of a crypto payment
+ */
+router.get('/crypto-status/:paymentId', authenticateToken, async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const userId = req.user.id;
+
+    const cryptoPayment = await CryptoPayment.findByPaymentId(paymentId);
+    
+    if (!cryptoPayment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Payment not found'
+      });
+    }
+
+    // Verify user owns this payment
+    if (cryptoPayment.userId.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        status: cryptoPayment.status,
+        confirmedAt: cryptoPayment.confirmedAt,
+        transactionHash: cryptoPayment.transactionHash,
+        errorMessage: cryptoPayment.errorMessage,
+        expiresAt: cryptoPayment.expiresAt,
+        isExpired: cryptoPayment.isExpired()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error checking crypto payment status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check payment status'
     });
   }
 });

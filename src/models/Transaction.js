@@ -9,8 +9,9 @@ const transactionSchema = new mongoose.Schema({
   },
   stripePaymentIntentId: {
     type: String,
-    required: true,
+    required: false,
     unique: true,
+    sparse: true,
     index: true
   },
   stripeSessionId: {
@@ -42,7 +43,7 @@ const transactionSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['card', 'apple_pay', 'google_pay', 'other'],
+    enum: ['card', 'apple_pay', 'google_pay', 'crypto', 'other'],
     default: 'card'
   },
   description: {

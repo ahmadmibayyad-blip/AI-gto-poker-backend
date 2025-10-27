@@ -906,11 +906,11 @@ router.post('/daily-checkin/:userId', async (req, res) => {
     }
 
     // Generate random quota reward (5-25)
-    const quotaRewards = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5,  // 50% chance for 5
-                          10, 10, 10, 10, 10, 10, 10,    // 35% chance for 10
-                          15, 15, 15,                     // 10% chance for 15
-                          20, 20,                         // 3% chance for 20
-                          25];                            // 2% chance for 25
+    const quotaRewards = [2, 2, 2, 2, 2, 2, 2, 2, 2, ,  // 50% chance for 2
+                          3, 3, 3, 3, 3, 3, 3,          // 35% chance for 3
+                          5, 5, 5,                      // 10% chance for 5
+                          7, 7,                         // 3% chance for 7
+                          10];                          // 2% chance for 10
     
     const randomIndex = Math.floor(Math.random() * quotaRewards.length);
     const quotaReward = quotaRewards[randomIndex];
@@ -1129,7 +1129,7 @@ router.get('/streaks-goals/:userId', async (req, res) => {
     const weeklyProgress = {
       daysActive: weeklyActiveDays.size,
       goalDays: 7,
-      pointsEarned: weeklyActiveDays.size >= 7 ? 20 : 0,
+      pointsEarned: weeklyActiveDays.size >= 7 ? 3: 0,
       isCompleted: weeklyActiveDays.size >= 7
     };
 
@@ -1144,7 +1144,7 @@ router.get('/streaks-goals/:userId', async (req, res) => {
     const monthlyProgress = {
       daysActive: monthlyActiveDays.size,
       goalDays: 30,
-      pointsEarned: monthlyActiveDays.size >= 30 ? 70 : 0,
+      pointsEarned: monthlyActiveDays.size >= 30 ? 10 : 0,
       isCompleted: monthlyActiveDays.size >= 30
     };
 
@@ -1159,7 +1159,7 @@ router.get('/streaks-goals/:userId', async (req, res) => {
         description: 'Complete your first analysis',
         icon: 'star',
         earned: analyses.length > 0,
-        points: 5
+        points: 1
       },
       {
         id: 'weekly_warrior',
@@ -1167,7 +1167,7 @@ router.get('/streaks-goals/:userId', async (req, res) => {
         description: 'Be active for 7 consecutive days',
         icon: 'flame',
         earned: weeklyProgress.isCompleted,
-        points: 20
+        points: 3
       },
       {
         id: 'monthly_master',
@@ -1175,7 +1175,7 @@ router.get('/streaks-goals/:userId', async (req, res) => {
         description: 'Be active for 30 consecutive days',
         icon: 'trophy',
         earned: monthlyProgress.isCompleted,
-        points: 70
+        points: 10
       },
       {
         id: 'streak_keeper',
@@ -1183,24 +1183,8 @@ router.get('/streaks-goals/:userId', async (req, res) => {
         description: 'Maintain a 10-day streak',
         icon: 'flash',
         earned: currentStreak >= 10,
-        points: 15
+        points: 4
       },
-      {
-        id: 'dedicated_learner',
-        name: 'Dedicated Learner',
-        description: 'Complete 50 analyses',
-        icon: 'school',
-        earned: analyses.length >= 50,
-        points: 25
-      },
-      {
-        id: 'accuracy_ace',
-        name: 'Accuracy Ace',
-        description: 'Achieve 90%+ accuracy in 10 analyses',
-        icon: 'target',
-        earned: false, // This would need more complex calculation
-        points: 30
-      }
     ];
 
     // Check if user has checked in today
