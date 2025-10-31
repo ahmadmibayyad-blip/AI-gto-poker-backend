@@ -5,6 +5,8 @@ const Transaction = require('../models/Transaction');
 const PaymentPlan = require('../models/PaymentPlan');
 const CryptoPayment = require('../models/CryptoPayment');
 const { authenticateToken, authenticateAdmin } = require('../middleware/auth');
+const { getSolUsdRate, getUsdtUsdRate } = require('../utils/cryptoRates');
+const { verifyBEP20Transaction, verifySOLTransaction } = require('../utils/blockchainVerification');
 
 // Test route to verify payments router is working
 router.get('/test', (req, res) => {
@@ -1045,7 +1047,7 @@ router.post('/webhook', express.raw({type: 'application/json'}), async (req, res
     console.log('📋 Request headers:', Object.keys(req.headers));
     console.log('📋 Content-Type:', req.headers['content-type']);
     console.log('📋 Stripe-Signature:', req.headers['stripe-signature']);
-    
+
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
@@ -1431,9 +1433,27 @@ router.post('/verify-crypto-transaction', authenticateToken, async (req, res) =>
 
     // Check if already confirmed
     if (cryptoPayment.status === 'confirmed') {
-      return res.status(400).json({
+      console.log(`⚠️ Transaction already processed: ${txnHash}`);
+      return res.status(200).json({
         success: false,
-        error: 'This payment has already been confirmed'
+        error: 'This payment has already been confirmed',
+        alreadyProcessed: true
+      });
+    }
+
+    // Check if this transaction hash was already used
+    const existingPayment = await CryptoPayment.findOne({ 
+      transactionHash: txnHash,
+      status: 'confirmed',
+      _id: { $ne: cryptoPayment._id }
+    });
+    
+    if (existingPayment) {
+      console.log(`⚠️ Transaction already processed: ${txnHash}`);
+      return res.status(200).json({
+        success: false,
+        error: 'This transaction hash has already been used for another payment',
+        alreadyProcessed: true
       });
     }
 
@@ -1458,43 +1478,71 @@ router.post('/verify-crypto-transaction', authenticateToken, async (req, res) =>
     // Verify on blockchain (mock implementation for now)
     let verified = false;
     let verificationData = null;
+    let verificationError = null;
 
     if (cryptoPayment.network === 'BEP20') {
-      // For BEP20 - mock verification
-      // In production, implement actual BSC blockchain verification
-      verified = true;
-      verificationData = {
-        amount: cryptoPayment.amount,
-        fromAddress: '0x' + '0'.repeat(40),
-        confirmationCount: 3
-      };
-      
-      console.log('⚠️ BEP20 verification is mocked. Implement actual blockchain verification.');
-      
+      // For BEP20 - verify on BSC blockchain
+      console.log('🔍 Verifying BEP20 transaction on BSC blockchain...');
+
+      const result = await verifyBEP20Transaction(
+        txnHash,
+        cryptoPayment.walletAddress,
+        null, // Accept any USDT amount; credits will be computed dynamically
+        cryptoPayment.memo
+      );
+
+      if (result.verified) {
+        verified = true;
+        verificationData = {
+          amount: result.amount,
+          fromAddress: result.fromAddress,
+          confirmationCount: result.confirmationCount
+        };
+        console.log('✅ BEP20 transaction verified successfully');
+      } else {
+        verificationError = result.error || 'BEP20 verification failed';
+        console.error('❌ BEP20 verification failed:', verificationError);
+      }
+
     } else if (cryptoPayment.network === 'SOL') {
-      // For SOL - mock verification
-      // In production, implement actual Solana blockchain verification
-      verified = true;
-      verificationData = {
-        amount: cryptoPayment.amount,
-        fromAddress: '0'.repeat(44),
-        confirmationCount: 32
-      };
+      // For SOL - verify on Solana blockchain
+      console.log('🔍 Verifying SOL transaction on Solana blockchain...');
       
-      console.log('⚠️ SOL verification is mocked. Implement actual blockchain verification.');
+      const result = await verifySOLTransaction(
+        txnHash,
+        cryptoPayment.walletAddress,
+        null, // Accept any SOL amount; credits will be computed dynamically
+        cryptoPayment.memo
+      );
+
+      if (result.verified) {
+        verified = true;
+        verificationData = {
+          amount: result.amount,
+          fromAddress: result.fromAddress,
+          confirmationCount: result.confirmationCount
+        };
+        console.log('✅ SOL transaction verified successfully');
+      } else {
+        verificationError = result.error || 'SOL verification failed';
+        console.error('❌ SOL verification failed:', verificationError);
+      }
+    } else {
+      verificationError = `Unsupported network: ${cryptoPayment.network}`;
+      console.error('❌', verificationError);
     }
 
     if (!verified || !verificationData) {
-      cryptoPayment.fail('Transaction verification failed');
+      cryptoPayment.fail(verificationError || 'Transaction verification failed');
       await cryptoPayment.save();
       
       return res.status(400).json({
         success: false,
-        error: 'Transaction could not be verified. Please check your transaction hash.'
+        error: verificationError || 'Transaction could not be verified. Please check your transaction hash.'
       });
     }
 
-    // Mark payment as confirmed
+    // Mark payment as confirmed with on-chain amount (token or SOL)
     cryptoPayment.confirm(
       verificationData.amount,
       verificationData.fromAddress,
@@ -1521,40 +1569,111 @@ router.post('/verify-crypto-transaction', authenticateToken, async (req, res) =>
       });
     }
 
-    // Create transaction record
+    let quotaToAdd = plan.quotaAmount;
+    let usdAmountForTransaction = cryptoPayment.amount; // default
+    const USD_PER_CREDIT = 0.45;
+
+    if (cryptoPayment.network === 'SOL') {
+      // Dynamic credits based on SOL amount and SOL/USD
+      const solAmount = verificationData.amount;
+      const solUsd = await getSolUsdRate();
+      const usdAmount = solAmount * solUsd;
+      const dynamicCredits = Math.floor(usdAmount / USD_PER_CREDIT);
+
+      if (dynamicCredits <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Insufficient amount. Sent ~$${usdAmount.toFixed(2)}; minimum 1 credit requires $${USD_PER_CREDIT.toFixed(2)}.`
+        });
+      }
+
+      quotaToAdd = dynamicCredits;
+      usdAmountForTransaction = usdAmount;
+      // Persist effective USD amount for SOL flow
+      cryptoPayment.amount = parseFloat(usdAmount.toFixed(2));
+      await cryptoPayment.save();
+      console.log(`💱 SOL→USD rate: ${solUsd}. SOL: ${solAmount}, USD: ${usdAmountForTransaction.toFixed(2)}, Credits: ${quotaToAdd}`);      
+      
+    } else if (cryptoPayment.network === 'BEP20') {
+      // Dynamic credits based on USDT amount and USDT/USD rate
+      // 1 credit = $0.45 USD
+      const usdtAmount = verificationData.amount;
+      const usdtUsd = await getUsdtUsdRate(); // USDT is typically 1:1 with USD
+      const usdAmount = usdtAmount * usdtUsd;
+      const dynamicCredits = Math.floor(usdAmount / USD_PER_CREDIT);
+
+      if (dynamicCredits <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Insufficient amount. Sent ~$${usdAmount.toFixed(2)}; minimum 1 credit requires $${USD_PER_CREDIT.toFixed(2)}.`
+        });
+      }
+
+      quotaToAdd = dynamicCredits;
+      usdAmountForTransaction = usdAmount;
+      // Persist effective USD amount for BEP20 flow
+      cryptoPayment.amount = parseFloat(usdAmount.toFixed(2));
+      await cryptoPayment.save();
+      console.log(`💱 BEP20→USD rate: ${usdtUsd}. USDT: ${usdtAmount}, USD: ${usdAmountForTransaction.toFixed(2)}, Credits: ${quotaToAdd}`);
+    }
+
+    // Check if transaction already exists for this hash (prevent duplicates)
+    const existingTransaction = await Transaction.findOne({ 
+      cryptoTransactionHash: txnHash 
+    });
+    
+    if (existingTransaction) {
+      console.log(`⚠️  Transaction already processed: ${txnHash}`);
+      return res.json({
+        success: true,
+        data: {
+          verified: true,
+          quotaAdded: existingTransaction.quotaAmount,
+          newAvailableUsage: user.availableUsage,
+          transactionId: existingTransaction._id,
+          amount: existingTransaction.amount / 100,
+          confirmationCount: verificationData.confirmationCount,
+          alreadyProcessed: true
+        }
+      });
+    }
+
+    // Create transaction record with crypto-specific fields
     const transaction = await Transaction.create({
       userId,
-      stripePaymentIntentId: null,
-      amount: Math.round(cryptoPayment.amount * 100), // Convert to cents
+      amount: Math.round(usdAmountForTransaction * 100), // cents
       currency: 'usd',
-      quotaAmount: plan.quotaAmount,
+      quotaAmount: quotaToAdd,
       status: 'succeeded',
-      description: `Purchase ${plan.quotaAmount} analysis credits via ${cryptoPayment.network} - ${plan.name}`,
+      paymentMethod: 'crypto',
+      description: `Purchase ${quotaToAdd} credits via ${cryptoPayment.network} (dynamic rate) - ${plan.name}`,
+      // Crypto-specific fields
+      cryptoTransactionHash: txnHash,
+      cryptoNetwork: cryptoPayment.network,
+      cryptoToken: cryptoPayment.token,
+      // Metadata for additional info
       metadata: {
-        paymentMethod: 'crypto',
-        network: cryptoPayment.network,
-        token: cryptoPayment.token,
-        transactionHash: txnHash,
-        cryptoPaymentId: cryptoPayment._id,
-        planId: plan._id,
-        planName: plan.name
+        cryptoPaymentId: cryptoPayment._id.toString(),
+        planId: plan._id.toString(),
+        planName: plan.name,
+        confirmations: verificationData.confirmationCount?.toString() || '0'
       }
     });
 
     // Add quota to user
-    user.totalSpent = (user.totalSpent || 0) + cryptoPayment.amount;
-    await user.addQuota(plan.quotaAmount, transaction._id);
+    user.totalSpent = (user.totalSpent || 0) + usdAmountForTransaction;
+    await user.addQuota(quotaToAdd, transaction._id);
 
-    console.log(`✅ Crypto payment confirmed: ${paymentId} - User ${user.email} received ${plan.quotaAmount} credits`);
+    console.log(`✅ Crypto payment confirmed: ${paymentId} - User ${user.email} received ${quotaToAdd} credits`);
 
     res.json({
       success: true,
       data: {
         verified: true,
-        quotaAdded: plan.quotaAmount,
+        quotaAdded: quotaToAdd,
         newAvailableUsage: user.availableUsage,
         transactionId: transaction._id,
-        amount: cryptoPayment.amount,
+        amount: usdAmountForTransaction,
         confirmationCount: verificationData.confirmationCount
       }
     });

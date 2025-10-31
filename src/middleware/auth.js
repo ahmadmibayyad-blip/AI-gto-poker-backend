@@ -82,6 +82,7 @@ const authenticateToken = async (req, res, next) => {
  * @param {Object} res - Express response object
  * @param {Function} next - Express next function
  */
+
 const authenticateAdmin = async (req, res, next) => {
   try {
     // Get token from header

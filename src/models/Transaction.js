@@ -9,15 +9,23 @@ const transactionSchema = new mongoose.Schema({
   },
   stripePaymentIntentId: {
     type: String,
-    required: false,
-    unique: true,
-    sparse: true,
-    index: true
+    required: false // Optional for crypto payments
   },
   stripeSessionId: {
+    type: String
+  },
+  // Crypto payment fields
+  cryptoTransactionHash: {
+    type: String
+  },
+  cryptoNetwork: {
     type: String,
-    unique: true,
-    sparse: true // Allows null values but ensures uniqueness when present
+    enum: ['SOL', 'USDT', 'USDC', null],
+    default: null
+  },
+  cryptoToken: {
+    type: String,
+    default: null
   },
   amount: {
     type: Number,
@@ -74,7 +82,43 @@ const transactionSchema = new mongoose.Schema({
 // Indexes for better query performance
 transactionSchema.index({ userId: 1, createdAt: -1 });
 transactionSchema.index({ status: 1, createdAt: -1 });
-transactionSchema.index({ stripePaymentIntentId: 1 });
+
+// Unique indexes with partial filter expressions to allow multiple nulls
+// Note: Cannot use "sparse: true" with "partialFilterExpression" - they're mutually exclusive
+// $type: 'string' automatically excludes null values (null is type 10, string is type 2)
+
+// Stripe payment intent - unique only when present, allows multiple nulls
+transactionSchema.index(
+  { stripePaymentIntentId: 1 },
+  { 
+    unique: true,
+    partialFilterExpression: { 
+      stripePaymentIntentId: { $type: 'string' } 
+    } 
+  }
+);
+
+// Stripe session - unique only when present, allows multiple nulls
+transactionSchema.index(
+  { stripeSessionId: 1 },
+  { 
+    unique: true,
+    partialFilterExpression: { 
+      stripeSessionId: { $type: 'string' } 
+    } 
+  }
+);
+
+// Crypto transaction hash - unique only when present, allows multiple nulls
+transactionSchema.index(
+  { cryptoTransactionHash: 1 },
+  { 
+    unique: true,
+    partialFilterExpression: { 
+      cryptoTransactionHash: { $type: 'string' } 
+    } 
+  }
+);
 
 // Virtual for formatted amount
 transactionSchema.virtual('formattedAmount').get(function() {
